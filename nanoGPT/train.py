@@ -136,7 +136,7 @@ print(decode(m.generate(idx=idx, max_new_tokens=100)[0].tolist()))
 optimizer = torch.optim.AdamW(m.parameters(), lr=1e-3)
 
 batch_size = 32
-for steps in range(1000):
+for steps in range(100):
     xb, yb = get_batch('train')
 
     # evaluate the loss
@@ -146,3 +146,54 @@ for steps in range(1000):
     optimizer.step()
 print("Bigram Loss: ", loss.item())
 print(decode(m.generate(idx=idx, max_new_tokens=100)[0].tolist()))
+
+# math trick in self attention
+# only focus on the previous tokens and take average of those tokens
+
+import torch
+torch.manual_seed(1337)
+B, T, C = 4, 8, 2
+x = torch.randn(B, T, C)
+print(x.shape)
+
+# We want x[b, t] = mean_{i<=t} x[b, i]
+xbow = torch.zeros((B, T, C))  # bow = bag of words
+for b in range(B):
+    for t in range(T):
+        xprev = x[b, : t+1]  # everything up to and including t'th token; shape - (t, C)
+        xbow[b, t] = torch.mean(xprev, 0)
+
+print(x[0])
+print(xbow[0])
+
+# matrix multiplication
+torch.manual_seed(42)
+
+print(torch.tril(torch.ones(3, 3)))  # return a triangular of ones (on the left side)
+
+a = torch.tril(torch.ones(3, 3))
+a = a / torch.sum(a, 1, keepdim=True)
+b = torch.randint(0, 10, (3, 2)).float()
+c = a @ b
+print('a=', a)
+print('b=', b)
+print('c=', c)
+
+# above self attention code can be replaced with, version 2
+wei = torch.tril(torch.ones(T, T))
+wei = wei / wei.sum(1, keepdim=True)
+print(wei)
+xbow2 = wei @ x  # (B, T, T) @ (B, T, C) --> (B, T, C)
+print("allclose xbow2", torch.allclose(xbow, xbow2))
+
+# version 3, softmax
+tril = torch.tril(torch.ones(T, T))
+print(f"tril", tril)
+wei = torch.zeros((T, T))
+print("wei", wei)
+wei = wei.masked_fill(tril == 0, float('-inf'))
+print("wei masked", wei)
+wei = F.softmax(wei, dim=-1)
+print("wei softmax", wei)
+xbow3 = wei @ x
+print("allclose xbow3", torch.allclose(xbow, xbow3))
