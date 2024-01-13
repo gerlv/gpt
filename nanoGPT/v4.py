@@ -5,15 +5,18 @@ import torch.nn as nn
 from torch.nn import functional as F
 torch.manual_seed(1337)
 
-batch_size = 32
-block_size = 8
+batch_size = 64
+block_size = 256
 training_split = 0.9
-max_iters = 10000
+max_iters = 5000
 max_new_tokens = 100
-learning_rate = 1e-3
-eval_iters = 500
+learning_rate = 3e-4
+eval_iters = 100
 device = 'cpu'
-n_embed = 32
+n_embed = 384
+n_heads = 6
+n_layer = 6
+dropout = 0.2
 
 dataset = Path('../data/tinyshakespear.txt')
 text = dataset.read_text()
@@ -81,6 +84,8 @@ class Head(nn.Module):
         self.value = nn.Linear(n_embed, head_size, bias=False)
         self.register_buffer('tril', torch.tril(torch.ones(block_size, block_size)))
 
+        self.dropout = nn.Dropout(dropout)
+
     def forward(self, x):
         B, T, C = x.shape
         k = self.key(x)
@@ -89,6 +94,7 @@ class Head(nn.Module):
         wei = q @ k.transpose(-2, -1) * C**-0.5
         wei = wei.masked_fill(self.tril[:T, :T] == 0, float('-inf'))
         wei = F.softmax(wei, dim=-1)  # (B, T, T)
+        wei = self.dropout(wei)
         v = self.value(x)  # (B, T, C)
         out = wei @ v  # (B, T, T) @ (B, T, C) --> (B, T, C)
         return out
@@ -99,10 +105,11 @@ class MultiHeadAttention(nn.Module):
         super().__init__()
         self.heads = nn.ModuleList([Head(head_size) for _ in range(num_heads)])
         self.proj = nn.Linear(n_embed, n_embed)
+        self.dropout = nn.Dropout(dropout)
 
     def forward(self, x):
         out = torch.cat([h(x) for h in self.heads], dim=-1)
-        out = self.proj(out)
+        out = self.dropout(self.proj(out))
         return out
 
 
@@ -113,6 +120,7 @@ class FeedForward(nn.Module):
             nn.Linear(n_embd, 4 * n_embd),
             nn.ReLU(),
             nn.Linear(4 * n_embd, n_embd),
+            nn.Dropout(dropout)
         )
 
     def forward(self, x):
@@ -142,12 +150,8 @@ class BigramLanguageModel(nn.Module):
         super().__init__()
         self.token_embedding_table = nn.Embedding(vocab_size, n_embed)
         self.position_embedding_table = nn.Embedding(block_size, n_embed)
-        self.blocks = nn.Sequential(
-            Block(n_embed, n_head=4),
-            Block(n_embed, n_head=4),
-            Block(n_embed, n_head=4),
-            nn.LayerNorm(n_embed)
-        )
+        self.blocks = nn.Sequential(*[Block(n_embed, n_head=n_heads) for _ in range(n_layer)])
+        self.ln_f = nn.LayerNorm(n_embed)
         self.lm_head = nn.Linear(n_embed, vocab_size)
 
     def forward(self, idx, targets=None):
@@ -158,6 +162,7 @@ class BigramLanguageModel(nn.Module):
         x = tok_emb + pos_emb  # (B, T, C)
         # x holds token identities and positions where these tokens occur
         x = self.blocks(x)
+        x = self.ln_f(x)
         logits = self.lm_head(x)  # (B, T, vocab_size) - batch, time, vocab size
 
         # logits are scores for the next token, we are predicting what comes next
