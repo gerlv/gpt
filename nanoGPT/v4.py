@@ -8,9 +8,10 @@ torch.manual_seed(1337)
 batch_size = 32
 block_size = 8
 training_split = 0.9
-steps = 1000
+max_iters = 10000
 max_new_tokens = 100
-eval_iters = 200
+learning_rate = 1e-3
+eval_iters = 500
 device = 'cpu'
 n_embed = 32
 
@@ -72,6 +73,27 @@ def estimate_loss():
     return out
 
 
+class Head(nn.Module):
+    def __init__(self, head_size):
+        super().__init__()
+        self.key = nn.Linear(n_embed, head_size, bias=False)
+        self.query = nn.Linear(n_embed, head_size, bias=False)
+        self.value = nn.Linear(n_embed, head_size, bias=False)
+        self.register_buffer('tril', torch.tril(torch.ones(block_size, block_size)))
+
+    def forward(self, x):
+        B, T, C = x.shape
+        k = self.key(x)
+        q = self.query(x)
+
+        wei = q @ k.transpose(-2, -1) * C**-0.5
+        wei = wei.masked_fill(self.tril[:T, :T] == 0, float('-inf'))
+        wei = F.softmax(wei, dim=-1)  # (B, T, T)
+        v = self.value(x)  # (B, T, C)
+        out = wei @ v  # (B, T, T) @ (B, T, C) --> (B, T, C)
+        return out
+
+
 # Bigram model
 
 
@@ -80,6 +102,7 @@ class BigramLanguageModel(nn.Module):
         super().__init__()
         self.token_embedding_table = nn.Embedding(vocab_size, n_embed)
         self.position_embedding_table = nn.Embedding(block_size, n_embed)
+        self.sa_head = Head(n_embed)
         self.lm_head = nn.Linear(n_embed, vocab_size)
 
     def forward(self, idx, targets=None):
@@ -89,6 +112,7 @@ class BigramLanguageModel(nn.Module):
         pos_emb = self.position_embedding_table(torch.arange(T, device=device))  # (T, C)
         x = tok_emb + pos_emb  # (B, T, C)
         # x holds token identities and positions where these tokens occur
+        x = self.sa_head(x)
         logits = self.lm_head(x)  # (B, T, vocab_size) - batch, time, vocab size
 
         # logits are scores for the next token, we are predicting what comes next
@@ -130,9 +154,9 @@ m = model.to(device=device)
 loss = None
 
 # train the model
-optimizer = torch.optim.AdamW(m.parameters(), lr=1e-3)
+optimizer = torch.optim.AdamW(m.parameters(), lr=learning_rate)
 
-for step in range(steps):
+for step in range(max_iters):
     if step % eval_iters == 0:
         losses = estimate_loss()
         print(f"step ({step}): train loss {losses['train']:.4f}, val loss: {losses['val']:.4f}")

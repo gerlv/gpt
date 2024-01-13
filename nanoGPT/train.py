@@ -197,3 +197,46 @@ wei = F.softmax(wei, dim=-1)
 print("wei softmax", wei)
 xbow3 = wei @ x
 print("allclose xbow3", torch.allclose(xbow, xbow3))
+
+# v4 - self attention
+print('v4 - self attention')
+torch.manual_seed(1337)
+B, T, C = 4, 8, 32
+x = torch.randn(B, T, C)
+tril = torch.tril(torch.ones(T, T))
+wei = torch.zeros((T, T))
+wei = wei.masked_fill(tril == 0, float("-inf"))
+wei = F.softmax(wei, dim=-1)
+out = wei @ x
+print('out shape', out.shape)
+
+# self attention
+# every single token at each position will emit two vectors - query and key
+# query - what am I looking for
+# key - what do I contain
+# do a dot product between keys and queries
+
+print('v4 - self attention')
+torch.manual_seed(1337)
+B, T, C = 4, 8, 32
+x = torch.randn(B, T, C)
+
+# head
+head_size = 16
+key = nn.Linear(C, head_size, bias=False)
+query = nn.Linear(C, head_size, bias=False)
+value = nn.Linear(C, head_size, bias=False)
+k = key(x)  # (B, T, 16)
+q = query(x)  # (B, T, 16)
+wei = q @ k.transpose(-2, -1)  # (B, T, 16) @ (B, 16, T)  --> (B, T, T)
+
+tril = torch.tril(torch.ones(T, T))
+# wei = torch.zeros((T, T))
+wei = wei.masked_fill(tril == 0, float("-inf"))
+wei = F.softmax(wei, dim=-1)
+
+v = value(x)
+out = wei @ v
+print('out shape', out.shape)
+# attention is a communications mechanism - can be seen as nodes in a directed graph
+# each node has vector info and wants to agregated all weighted
